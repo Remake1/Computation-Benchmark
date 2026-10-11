@@ -12,7 +12,7 @@ const flags = [
   '-O3', '-fno-vectorize', '-fno-slp-vectorize', '-ffp-contract=off',
   '-sMODULARIZE=1', '-sEXPORT_ES6=1', '-sENVIRONMENT=web',
   '-sFILESYSTEM=0', '-sALLOW_MEMORY_GROWTH=1',
-  '-sEXPORTED_FUNCTIONS=["_affine","_malloc","_free"]',
+  '-sEXPORTED_FUNCTIONS=["_affine","_matmul","_malloc","_free"]',
   '-sEXPORTED_RUNTIME_METHODS=["HEAPF32"]',
 ];
 mkdirSync('public/wasm', { recursive: true });

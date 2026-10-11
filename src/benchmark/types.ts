@@ -1,31 +1,39 @@
 export type BackendId = 'js-number' | 'js-f32' | 'wasm-scalar' | 'webgpu-baseline';
-export type Scenario = 'warm' | 'resident';
-export type Preset = 'quick' | 'size' | 'intensity' | 'custom';
+export type WorkloadId = 'W1' | 'W2';
+export type Scenario = 'warm' | 'resident' | 'reuse';
+export type Preset = 'quick' | 'size' | 'intensity' | 'shape' | 'custom';
 export interface Parameters { n: number; k: number; r: number }
 export interface Inputs { x: Float32Array; y: Float32Array }
+export interface MatrixParameters extends Parameters { m: number }
+export interface MatrixInputs { a: Float32Array[]; b: Float32Array; reference: Float64Array }
+export type AnyParameters = Parameters | MatrixParameters;
+export type AnyInputs = Inputs | MatrixInputs;
 export interface Accuracy {
   validation_passed: boolean;
   max_abs_error: number | null;
   relative_l2_error: number | null;
 }
-export interface Backend {
+export interface Backend<P extends Parameters = Parameters, I = Inputs> {
   readonly id: BackendId;
   readonly metadata: Record<string, unknown>;
   initialize(): Promise<void>;
-  prepare(parameters: Parameters): void | Promise<void>;
-  stage(inputs: Inputs): void | Promise<void>;
-  warm(inputs: Inputs, output: Float32Array): number | Promise<number>;
+  prepare(parameters: P): void | Promise<void>;
+  stage(inputs: I): void | Promise<void>;
+  warm(inputs: I, output: Float32Array): number | Promise<number>;
+  reuse?(inputs: I, output: Float32Array): number | Promise<number>;
   resident(repetitions: number): number | Promise<number>;
   readOutput(output: Float32Array): void | Promise<void>;
   dispose(): void;
 }
-export interface Workload {
-  id: string;
-  generate(n: number, seed: number): Inputs;
-  validate(inputs: Inputs, output: Float32Array, parameters: Parameters): Accuracy;
-  logicalBytes(parameters: Parameters): number;
+export interface Workload<P extends Parameters = Parameters, I = Inputs> {
+  id: WorkloadId;
+  generate(parameters: P, seed: number): I;
+  validateParameters(parameters: P, seed: number): void;
+  outputLength(parameters: P, scenario: Scenario): number;
+  validate(inputs: I, output: Float32Array, parameters: P, scenario?: Scenario): Accuracy;
+  logicalBytes(parameters: P): number;
 }
-export interface RunOptions {
+export interface RunOptions<P extends Parameters = Parameters> {
   experimentId: string;
   sessionId: string;
   seed: number;
@@ -37,8 +45,9 @@ export interface RunOptions {
   timerResolutionMs: number;
   sourceRevision?: string | null;
   scenarios: Scenario[];
-  configurations: Parameters[];
+  configurations: P[];
 }
+export class ConfigurationSkip extends Error {}
 export type Status = 'ok' | 'unsupported' | 'skipped' | 'error' | 'validation-failed' | 'cancelled' | 'budget-exhausted';
 export interface SampleRecord extends Omit<Accuracy, 'validation_passed'> {
   validation_passed: boolean | null;
@@ -52,7 +61,7 @@ export interface SampleRecord extends Omit<Accuracy, 'validation_passed'> {
   seed: number;
   scheduling_seed: number;
   workload: string;
-  parameters: Parameters;
+  parameters: AnyParameters;
   backend: BackendId;
   implementation_tier: 'baseline';
   timing_scenario: Scenario;

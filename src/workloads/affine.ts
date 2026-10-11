@@ -1,4 +1,4 @@
-import type { Accuracy, Inputs, Parameters, Preset, Workload } from '../benchmark/types.ts';
+import type { Accuracy, Inputs, Parameters, Preset } from '../benchmark/types.ts';
 
 export const K_VALUES = [0, 4, 16, 64, 256];
 export const R_VALUES = [1, 10, 100];
@@ -33,7 +33,8 @@ export function configurations(preset: Preset, p: Parameters): Parameters[] {
   return [{ ...p }];
 }
 
-function generate(n: number, seed: number): Inputs {
+function generate(parameters: number | Parameters, seed: number): Inputs {
+  const n = typeof parameters === 'number' ? parameters : parameters.n;
   const random = random32(seed);
   const x = new Float32Array(n);
   const y = new Float32Array(n);
@@ -65,4 +66,8 @@ function validate(inputs: Inputs, output: Float32Array, p: Parameters): Accuracy
   };
 }
 
-export const affine: Workload = { id: 'W1', generate, validate, logicalBytes: p => 12 * p.n };
+export const affine = {
+  id: 'W1' as const, generate, validate, validateParameters,
+  outputLength: (p: Parameters) => p.n,
+  logicalBytes: (p: Parameters) => 12 * p.n,
+};
