@@ -8,6 +8,8 @@ interface ResultColumn {
   value(row: Summary): string | number;
 }
 
+const iqrFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3, useGrouping: false });
+
 function formatNumber(value: number | null): string {
   return value === null ? '—' : value.toPrecision(5);
 }
@@ -35,11 +37,8 @@ function resultColumns(definition: WorkloadDefinition): ResultColumn[] {
     { label: 'Scenario', value: row => row.scenario },
     { label: 'Samples', value: row => row.count },
     { label: 'Median ms', value: row => formatNumber(row.median) },
-    { label: 'IQR ms', value: row => formatNumber(row.iqr) },
+    { label: 'IQR ms', value: row => row.iqr === null ? '—' : iqrFormatter.format(row.iqr) },
     { label: 'ms / operation', value: row => formatNumber(row.perOperation) },
-    { label: 'vs JS Number', value: row => formatNumber(row.numberSpeedup) },
-    { label: 'vs JS f32', value: row => formatNumber(row.f32Speedup) },
-    { label: 'Scalar / SIMD', value: row => formatNumber(row.scalarSpeedup) },
     { label: definition.throughput.label, value: row => formatNumber(row[definition.throughput.metric]) },
     { label: 'Validation / status', value: formatStatus },
   ];
