@@ -21,6 +21,10 @@ Exports are named `w1-…jsonl` or `w2-…jsonl`. W1 retains schema version 1; W
 
 The correctness self-test follows the selected workload. W2 checks hand-calculated multiplication, zero/identity inputs, rectangular/tail dimensions, long dot products, and changing-A batches with fixed B. Use it before collecting browser measurements.
 
+## Harness code
+
+`src/main.ts` creates the backends and starts the harness. The modules in `src/harness/` separate run lifecycle and cancellation (`controller.ts`), form parsing and export metadata (`experiment.ts`), markup (`template.ts`), DOM updates (`view.ts`), and result columns/rendering (`results-view.ts`). `workloads.ts` centralizes each workload's controls, presets, descriptions, metrics, and export versions. Table headings and cells share column definitions; sample updates render at most once per animation frame, with a final flush on completion, cancellation, or failure. Benchmark execution and validation remain in `src/benchmark/`.
+
 ## Setup
 
 Use Node 24 (the repository pins 24.16.0) and pnpm 11.5.2:
