@@ -1,6 +1,14 @@
 # Browser computation benchmark
 
-W1 and W2 compare baseline `js-number`, `js-f32`, scalar C++/Wasm, and WebGPU compute. Choose a workload in the harness. W1 measures the vector affine transform (`K=0`) and a separately labeled recurrence/intensity variant (`K>0`). W2 measures dense row-major float32 matrix multiplication, `C[M,N] = A[M,K] × B[K,N]`, with direct row/column/K loops and one GPU invocation per output element. These are baseline CPU implementations, not optimized matrix multiplication. The app uses plain HTML controls and tables, with layout-only CSS.
+W1 and W2 compare baseline `js-number`, `js-f32`, `wasm-scalar`, and `webgpu-baseline`, plus an optimized `wasm-simd` backend. Choose a workload in the harness. W1 measures the vector affine transform (`K=0`) and a separately labeled recurrence/intensity variant (`K>0`). W2 measures dense row-major float32 matrix multiplication, `C[M,N] = A[M,K] × B[K,N]`. Baselines use direct row/column/K loops and one GPU invocation per output element; Wasm SIMD uses CPU blocking and vectors across columns. The app uses plain HTML controls and tables, with layout-only CSS.
+
+## Wasm SIMD
+
+Both Wasm variants compile the same `cpp/affine.cpp` source, with SIMD code selected by `__wasm_simd128__`. W1 loads four x/y elements into `f32x4` vectors, performs each runtime K recurrence in registers, and handles the final 1–3 elements with a scalar loop. W2 uses fixed 32×32×32 row/column/K blocks, broadcasts A values, and multiplies/adds four contiguous B/C columns at a time. All dimensions can end in partial blocks; columns outside complete vectors use scalar updates. Every execution zeros C before accumulation, including changing-A reuse batches.
+
+SIMD lanes represent independent outputs. W2 retains ascending K accumulation per output across blocks, with no horizontal reduction or reassociation. Both variants round each float32 multiply/add separately. The builds use `-O3 -fno-vectorize -fno-slp-vectorize -ffp-contract=off`, with `-mno-simd128` for scalar and `-msimd128` for explicit SIMD intrinsics. Neither uses fast-math or relaxed SIMD. Disabling automatic vectorization keeps the scalar control and scalar tails explicit. See the [Emscripten SIMD documentation](https://emscripten.org/docs/porting/simd.html).
+
+The harness probes SIMD support before loading the SIMD module, reports unsupported capability independently, and retains separate heaps and build metadata for each variant. Warm W1/W2 and W2 B reuse include the same JS/linear-memory copies as scalar; W1 resident execution excludes staging/readback. Memory budgets include both retained Wasm heaps. Samples export `implementation_tier: "optimized"` for SIMD, four lanes and scalar-tail handling, and W2 block size/loop/summation order. The results table shows the tier and a separate `Scalar / SIMD` improvement ratio. W2's ratio combines blocking and SIMD gains; it does not isolate SIMD alone. JS speedups compare within a tier, so SIMD's JS speedup cells are empty until a matching optimized JS implementation exists. Block size 32 is an initial choice, not a measured tuning winner.
 
 ## Workloads and timings
 
@@ -57,8 +65,11 @@ The SDK supplies its own Node executable; if it changes the active version, `nvm
 ```sh
 pnpm check
 pnpm test
+pnpm test:wasm
 pnpm build
 pnpm preview
 ```
 
-Production `build` recompiles Wasm before TypeScript/Vite. Development requires `build:wasm` again after C++ changes. Generated `.mjs`, `.wasm`, and `build.json` assets live in ignored `public/wasm/` and are copied to the production output. Build metadata records the compiler version, exact argument list, source revision, and whether the working tree was dirty. Commit source before final research builds for an identifiable revision; preserve exported metadata with results.
+Production `build` recompiles both Wasm variants before TypeScript/Vite. Development requires `build:wasm` again after C++ changes and a page reload to load new modules. Generated assets live in ignored `public/wasm/` and are copied to production: scalar `affine.mjs`, `affine.wasm`, `build.json`; SIMD `affine-simd.mjs`, `affine-simd.wasm`, `build-simd.json`. Each metadata file records its backend, compiler version, exact argument list, source revision, and whether the working tree was dirty. Commit source before final research builds for an identifiable revision; preserve exported metadata with results.
+
+`pnpm test:wasm` rebuilds both modules, disassembles them, and runs the real Emscripten modules in Node using local bytes. It requires the SDK's `wasm-dis` (automatically located beside an SDK compiler; set `WASM_DIS` if needed). Inspection rejects SIMD in the scalar module and relaxed SIMD in either module, and checks both SIMD kernels for `v128.load/store` and `f32x4.mul/add`. Function names are retained with `--profiling-funcs` for inspection. Integration tests cover hand/zero/identity cases, four-lane and block tails, rectangular and long-K multiplication, f32 agreement, repeated output overwrite, R=1/10/100 B reuse, heap growth, switching workloads, and exported timing/tuning records. `pnpm test` runs the toolchain-independent harness and capability tests.

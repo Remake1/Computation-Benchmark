@@ -10,6 +10,7 @@
     "build:wasm": "node scripts/build-wasm.mjs",
     "check": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:wasm": "pnpm build:wasm && node scripts/inspect-wasm.mjs && node --experimental-strip-types --test tests/wasm.integration.ts",
     "build": "pnpm build:wasm && tsc && vite build",
     "preview": "vite preview"
   },

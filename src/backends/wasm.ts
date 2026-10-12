@@ -1,4 +1,13 @@
-import type { AnyInputs, AnyParameters, Backend } from '../benchmark/types.ts';
+import type { AnyInputs, AnyParameters, Backend, Implementation, WorkloadId } from '../benchmark/types.ts';
+
+// A minimal module with a v128.const in a function body; validate without execution.
+export function supportsWasmSimd(): boolean {
+  return typeof WebAssembly !== 'undefined' && WebAssembly.validate(new Uint8Array([
+    0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123,
+    3, 2, 1, 0, 10, 22, 1, 20, 0, 253, 12,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11,
+  ]));
+}
 
 interface WasmModule {
   HEAPF32: Float32Array;
@@ -8,27 +17,42 @@ interface WasmModule {
   _matmul(a: number, b: number, out: number, m: number, n: number, k: number): void;
 }
 export class WasmBackend implements Backend<AnyParameters, AnyInputs> {
-  readonly id = 'wasm-scalar' as const;
+  readonly id: 'wasm-scalar' | 'wasm-simd';
+  readonly implementations: Partial<Record<WorkloadId, Implementation>>;
   metadata: Record<string, unknown> = {};
-  private module!: WasmModule;
+  protected module!: WasmModule;
   private initialization?: Promise<void>;
   private pointers: number[] = [];
   private p!: AnyParameters;
   private x!: Float32Array;
   private y!: Float32Array;
   private output!: Float32Array;
+  constructor(simd = false) {
+    this.id = simd ? 'wasm-simd' : 'wasm-scalar';
+    this.implementations = simd ? {
+      W1: { tier: 'optimized', tuning: { simd_lanes: 4, scalar_tail: true,
+        arithmetic: 'f32 multiply then add; no fusion', recurrence: 'runtime K, in registers' } },
+      W2: { tier: 'optimized', tuning: { simd_lanes: 4, block_size: 32, scalar_tail: true,
+        loop_order: 'row-block/column-block/K-block/row/K/column',
+        summation_order: 'ascending K per output, unchanged from scalar', arithmetic: 'f32 multiply then add; no fusion' } },
+    } : {};
+  }
   initialize(): Promise<void> {
     return this.initialization ??= this.load();
   }
-  private async load(): Promise<void> {
+  protected async load(): Promise<void> {
     if (typeof WebAssembly === 'undefined') throw new Error('WebAssembly is unavailable.');
+    if (this.id === 'wasm-simd' && !supportsWasmSimd()) throw new Error('WebAssembly SIMD is unavailable.');
     const base = new URL(`${import.meta.env.BASE_URL}wasm/`, location.href).href;
-    const response = await fetch(`${base}build.json`);
+    const simd = this.id === 'wasm-simd';
+    const response = await fetch(`${base}${simd ? 'build-simd' : 'build'}.json`);
     if (!response.ok) throw new Error('Wasm assets are missing. Run pnpm build:wasm.');
     this.metadata = await response.json();
-    const moduleUrl = `${base}affine.mjs`;
+    const moduleUrl = `${base}${simd ? 'affine-simd' : 'affine'}.mjs`;
     const { default: factory } = await import(/* @vite-ignore */ moduleUrl);
     this.module = await factory({ locateFile: (name: string) => `${base}${name}` });
+    this.metadata.heap_bytes = this.module.HEAPF32.byteLength;
+    this.metadata.implementations = this.implementations;
   }
   prepare(p: AnyParameters): void {
     this.dispose();

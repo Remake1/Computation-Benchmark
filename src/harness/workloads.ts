@@ -78,7 +78,7 @@ export const WORKLOADS: Record<WorkloadId, WorkloadDefinition> = {
     repetitionLabel: 'R (resident repetitions)',
     scenarios: [warmScenario, { value: 'resident', label: 'Resident batch (output stays in backend)' }],
     scenarioDescription: 'Resident repetitions overwrite the output from the same inputs. Final readback and validation are outside timing.',
-    resultsDescription: 'K=0 is the original affine transform; K>0 is the intensity variant. Warm timings are individual request latency; resident timings are batch throughput. Bandwidth is logical, not physical memory traffic. Speedup = matching JS median / backend median.',
+    resultsDescription: 'K=0 is the original affine transform; K>0 is the intensity variant. Warm timings are individual request latency; resident timings are batch throughput. Bandwidth is logical, not physical memory traffic. JS speedups compare the same tier. Scalar / SIMD = baseline scalar median / optimized SIMD median.',
     throughput: { label: 'Logical GB/s', metric: 'bandwidthGBs' },
     schemaVersion: 1,
     generatorVersion: AFFINE_GENERATOR_VERSION,
@@ -88,7 +88,7 @@ export const WORKLOADS: Record<WorkloadId, WorkloadDefinition> = {
   W2: {
     workload: matmul,
     title: 'W2: dense matrix multiplication',
-    algorithmHtml: '<code>C[M,N] = A[M,K] × B[K,N]</code>; row-major float32 inputs in [-0.5, 0.5], direct row/column/K loops.',
+    algorithmHtml: '<code>C[M,N] = A[M,K] × B[K,N]</code>; row-major float32 inputs in [-0.5, 0.5]. Baselines use direct row/column/K loops; optimized Wasm SIMD uses 32×32×32 blocks and four contiguous columns per vector, preserving ascending-K accumulation.',
     fields: [
       { name: 'm', label: 'M (rows of A)', type: 'number', value: 128, min: 1, max: MAX_DIMENSION },
       { name: 'n', label: 'N (columns of B)', type: 'number', value: 128, min: 1, max: MAX_DIMENSION },
@@ -103,7 +103,7 @@ export const WORKLOADS: Record<WorkloadId, WorkloadDefinition> = {
     repetitionLabel: 'R (B-reuse batch size)',
     scenarios: [warmScenario, { value: 'reuse', label: 'B-reuse batch (all outputs returned to JS)' }],
     scenarioDescription: 'Reuse stages B once outside timing. Each of R different A inputs and every C readback are included in batch timing; validation is outside timing.',
-    resultsDescription: 'Warm timings are individual request latency; reuse timings include R requests with fixed B. Approximate GFLOP/s = 2*M*N*K*repetitions / time. Speedup = matching JS median / backend median.',
+    resultsDescription: 'Warm timings are individual request latency; reuse timings include R requests with fixed B. Approximate GFLOP/s = 2*M*N*K*repetitions / time. JS speedups compare the same tier. Scalar / SIMD = baseline scalar median / optimized SIMD median; W2 combines blocking and SIMD gains.',
     throughput: { label: 'Approx. GFLOP/s', metric: 'gflops' },
     schemaVersion: 2,
     generatorVersion: MATRIX_GENERATOR_VERSION,

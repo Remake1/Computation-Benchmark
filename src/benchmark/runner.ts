@@ -20,7 +20,7 @@ export function estimateMemory(parameters: number | AnyParameters, backends: Bac
     const a = 4 * p.m * p.k, b = 4 * p.k * p.n, c = 4 * p.m * p.n;
     // Canonical A batch/B, JS-visible outputs, and cached float64 references.
     return 16 * 2 ** 20 + p.r * a + b + 3 * p.r * c + backends.reduce((bytes, backend) => {
-      if (backend.id === 'wasm-scalar') return bytes + Math.max(2 * (a + b + c), Number(backend.metadata.heap_bytes) || 0);
+      if (backend.id.startsWith('wasm-')) return bytes + Math.max(2 * (a + b + c), Number(backend.metadata.heap_bytes) || 0);
       // GPU A/B/C, complete batch readback, and queued writeBuffer staging.
       if (backend.id === 'webgpu-baseline') return bytes + a + b + c + p.r * c + p.r * a + b + 16;
       return bytes;
@@ -30,7 +30,7 @@ export function estimateMemory(parameters: number | AnyParameters, backends: Bac
   // Shared canonical inputs/output; resident CPU output; Wasm growth headroom;
   // four GPU buffers plus allowance for writeBuffer staging; fixed overhead.
   return 16 * 2 ** 20 + n * 12 + backends.reduce((bytes, backend) => {
-    if (backend.id === 'wasm-scalar') return bytes + Math.max(n * 16, Number(backend.metadata.heap_bytes) || 0);
+    if (backend.id.startsWith('wasm-')) return bytes + Math.max(n * 16, Number(backend.metadata.heap_bytes) || 0);
     return bytes + n * (backend.id === 'webgpu-baseline' ? 24 : 4);
   }, 0);
 }
@@ -85,7 +85,8 @@ export async function runBenchmark<P extends Parameters, I>(workload: Workload<P
   let sampleId = 0;
   const emit = (backend: Backend<P, I>, p: P, scenario: Scenario, status: Status,
     reason: string | null = null, elapsed: number | null = null, accuracy: Accuracy | null = null, index: number | null = null): void => {
-    const remote = backend.id === 'wasm-scalar' || backend.id === 'webgpu-baseline';
+    const remote = backend.id.startsWith('wasm-') || backend.id === 'webgpu-baseline';
+    const implementation = backend.implementations?.[workload.id];
     const matrix = workload.id === 'W2' && 'm' in p ? p as P & { m: number } : null;
     const repetitions = scenario === 'warm' ? 1 : p.r;
     const inputBytes = matrix ? 4 * (matrix.m * p.k * repetitions + p.k * p.n) : p.n * 8;
@@ -97,7 +98,7 @@ export async function runBenchmark<P extends Parameters, I>(workload: Workload<P
       record_type: 'sample', experiment_id: options.experimentId, environment_id: options.experimentId,
       session_id: options.sessionId, timestamp: new Date().toISOString(), sample_id: sampleId++, sample_index: index,
       seed: options.seed, scheduling_seed: options.schedulingSeed, workload: workload.id, parameters: { ...p }, backend: backend.id,
-      implementation_tier: 'baseline', timing_scenario: scenario, repetitions,
+      implementation_tier: implementation?.tier ?? 'baseline', timing_scenario: scenario, repetitions,
       elapsed_ms: elapsed, gpu_elapsed_ms: null, input_bytes: inputBytes, output_bytes: outputBytes,
       upload_bytes: elapsed === null ? null : upload, download_bytes: elapsed === null ? null : download,
       staged_bytes: elapsed === null ? null : upload + download,
@@ -106,7 +107,7 @@ export async function runBenchmark<P extends Parameters, I>(workload: Workload<P
       allocation_policy: 'preallocated per configuration', warmup_policy: { iterations: options.warmups },
       cache_policy: 'warm backend; browser/driver caches uncontrolled', worker_count: 0,
       compiler_flags: backend.metadata.compiler_flags ?? null, source_revision: options.sourceRevision ?? backend.metadata.source_revision ?? null,
-      tuning: backend.id === 'webgpu-baseline' ? { workgroup_size: 64, elements_per_invocation: 1 } : {},
+      tuning: implementation?.tuning ?? (backend.id === 'webgpu-baseline' ? { workgroup_size: 64, elements_per_invocation: 1 } : {}),
       timer_resolution_ms: options.timerResolutionMs,
       near_timer_granularity: elapsed !== null && elapsed < 10 * options.timerResolutionMs,
       ...(accuracy ?? unavailableAccuracy), status, skip_reason: reason,

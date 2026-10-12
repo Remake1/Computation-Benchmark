@@ -13,7 +13,7 @@ export async function selfTest(backends: Backend<AnyParameters, AnyInputs>[], si
     let initialized = false;
     try {
       await backend.initialize(); initialized = true;
-      for (const n of [1, 3, 63, 64, 65, 1023, 65537, 1048573]) {
+      for (const n of [1, 3, 4, 5, 63, 64, 65, 1023, 65537, 1048573]) {
         for (const k of n > 1023 ? [0] : K_VALUES) {
           if (signal.aborted) break;
           progress(`Self-test ${backend.id}: N=${n}, K=${k}`);
@@ -53,6 +53,7 @@ async function matrixSelfTest(backends: Backend<AnyParameters, AnyInputs>[], sig
     { m: 7, n: 13, k: 5, r: 10 },
     { m: 4, n: 17, k: 9, r: 10 },
     { m: 17, n: 4, k: 9, r: 10 },
+    ...[31, 32, 33].map(n => ({ m: n, n, k: n, r: 1 })), // SIMD block boundaries.
     { m: 127, n: 127, k: 127, r: 1 },
     { m: 4, n: 65, k: 2048, r: 1 },
   ];

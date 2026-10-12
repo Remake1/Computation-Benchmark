@@ -1,4 +1,9 @@
-export type BackendId = 'js-number' | 'js-f32' | 'wasm-scalar' | 'webgpu-baseline';
+export type BackendId = 'js-number' | 'js-f32' | 'wasm-scalar' | 'wasm-simd' | 'webgpu-baseline';
+export type ImplementationTier = 'baseline' | 'optimized';
+export interface Implementation {
+  tier: ImplementationTier;
+  tuning: Record<string, unknown>;
+}
 export type WorkloadId = 'W1' | 'W2';
 export type Scenario = 'warm' | 'resident' | 'reuse';
 export type Preset = 'quick' | 'size' | 'intensity' | 'shape' | 'custom';
@@ -16,6 +21,7 @@ export interface Accuracy {
 export interface Backend<P extends Parameters = Parameters, I = Inputs> {
   readonly id: BackendId;
   readonly metadata: Record<string, unknown>;
+  readonly implementations?: Partial<Record<WorkloadId, Implementation>>;
   initialize(): Promise<void>;
   prepare(parameters: P): void | Promise<void>;
   stage(inputs: I): void | Promise<void>;
@@ -63,7 +69,7 @@ export interface SampleRecord extends Omit<Accuracy, 'validation_passed'> {
   workload: string;
   parameters: AnyParameters;
   backend: BackendId;
-  implementation_tier: 'baseline';
+  implementation_tier: ImplementationTier;
   timing_scenario: Scenario;
   repetitions: number;
   elapsed_ms: number | null;

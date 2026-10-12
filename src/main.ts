@@ -11,6 +11,7 @@ const harness = createHarness(app, [
   new JavaScriptBackend(),
   new JavaScriptBackend(true),
   new WasmBackend(),
+  new WasmBackend(true),
   new WebGPUBackend(),
 ]);
 

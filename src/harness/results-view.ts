@@ -31,6 +31,7 @@ function resultColumns(definition: WorkloadDefinition): ResultColumn[] {
         : row.parameters[name],
     })),
     { label: 'Backend', value: row => row.backend },
+    { label: 'Tier', value: row => row.tier },
     { label: 'Scenario', value: row => row.scenario },
     { label: 'Samples', value: row => row.count },
     { label: 'Median ms', value: row => formatNumber(row.median) },
@@ -38,6 +39,7 @@ function resultColumns(definition: WorkloadDefinition): ResultColumn[] {
     { label: 'ms / operation', value: row => formatNumber(row.perOperation) },
     { label: 'vs JS Number', value: row => formatNumber(row.numberSpeedup) },
     { label: 'vs JS f32', value: row => formatNumber(row.f32Speedup) },
+    { label: 'Scalar / SIMD', value: row => formatNumber(row.scalarSpeedup) },
     { label: definition.throughput.label, value: row => formatNumber(row[definition.throughput.metric]) },
     { label: 'Validation / status', value: formatStatus },
   ];

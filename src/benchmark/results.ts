@@ -1,7 +1,8 @@
-import type { AnyParameters, BackendId, SampleRecord, Scenario, Status } from './types.ts';
+import type { AnyParameters, BackendId, ImplementationTier, SampleRecord, Scenario, Status } from './types.ts';
 
 export interface Summary {
   backend: BackendId;
+  tier: ImplementationTier;
   workload: string;
   parameters: AnyParameters;
   scenario: Scenario;
@@ -11,6 +12,7 @@ export interface Summary {
   perOperation: number | null;
   numberSpeedup: number | null;
   f32Speedup: number | null;
+  scalarSpeedup: number | null;
   bandwidthGBs: number | null;
   gflops: number | null;
   statuses: Status[];
@@ -26,7 +28,7 @@ export function summarize(records: SampleRecord[]): Summary[] {
   const groups = new Map<string, SampleRecord[]>();
   for (const record of records) {
     const { n, k, r } = record.parameters;
-    const key = `${record.workload}/${record.backend}/${'m' in record.parameters ? record.parameters.m : ''}/${n}/${k}/${r}/${record.timing_scenario}`;
+    const key = `${record.workload}/${record.implementation_tier}/${record.backend}/${'m' in record.parameters ? record.parameters.m : ''}/${n}/${k}/${r}/${record.timing_scenario}`;
     const group = groups.get(key) ?? [];
     group.push(record); groups.set(key, group);
   }
@@ -36,10 +38,10 @@ export function summarize(records: SampleRecord[]): Summary[] {
     const median = times.length ? quantile(times, 0.5) : null;
     const repetitions = first.repetitions;
     return {
-      workload: first.workload, backend: first.backend, parameters: first.parameters, scenario: first.timing_scenario, count: times.length,
+      workload: first.workload, backend: first.backend, tier: first.implementation_tier, parameters: first.parameters, scenario: first.timing_scenario, count: times.length,
       median, iqr: times.length ? quantile(times, 0.75) - quantile(times, 0.25) : null,
       perOperation: median === null ? null : median / repetitions,
-      numberSpeedup: null, f32Speedup: null,
+      numberSpeedup: null, f32Speedup: null, scalarSpeedup: null,
       bandwidthGBs: first.workload === 'W1' && first.parameters.k === 0 && median !== null && median > 0 ? 12 * first.parameters.n * repetitions / (median * 1e6) : null,
       gflops: first.workload === 'W2' && 'm' in first.parameters && median !== null && median > 0
         ? 2 * first.parameters.m * first.parameters.n * first.parameters.k * repetitions / (median * 1e6) : null,
@@ -49,7 +51,7 @@ export function summarize(records: SampleRecord[]): Summary[] {
     } as Summary;
   });
   for (const row of summaries) {
-    const matching = (backend: BackendId) => summaries.find(other => other.workload === row.workload && other.backend === backend && other.scenario === row.scenario &&
+    const matching = (backend: BackendId, tier = row.tier) => summaries.find(other => other.workload === row.workload && other.tier === tier && other.backend === backend && other.scenario === row.scenario &&
       ('m' in other.parameters ? other.parameters.m : null) === ('m' in row.parameters ? row.parameters.m : null) &&
       other.parameters.n === row.parameters.n && other.parameters.k === row.parameters.k && other.parameters.r === row.parameters.r);
     if (row.median !== null && row.median > 0 && !row.statuses.includes('validation-failed')) {
@@ -57,6 +59,10 @@ export function summarize(records: SampleRecord[]): Summary[] {
       const f32 = matching('js-f32');
       row.numberSpeedup = number?.median != null && number.median > 0 && !number.statuses.includes('validation-failed') ? number.median / row.median : null;
       row.f32Speedup = f32?.median != null && f32.median > 0 && !f32.statuses.includes('validation-failed') ? f32.median / row.median : null;
+      if (row.backend === 'wasm-simd' && row.tier === 'optimized') {
+        const scalar = matching('wasm-scalar', 'baseline');
+        row.scalarSpeedup = scalar?.median != null && scalar.median > 0 && !scalar.statuses.includes('validation-failed') ? scalar.median / row.median : null;
+      }
     }
   }
   return summaries;
