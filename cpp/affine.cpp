@@ -4,6 +4,25 @@
 #include <wasm_simd128.h>
 #endif
 
+extern "C" void reduce_sum(const float* x, float* out,
+                           std::uint32_t n, std::uint32_t b) {
+  for (std::uint32_t batch = 0; batch < b; ++batch) {
+    const float* input = x + batch * n;
+    std::uint32_t i = 0;
+    float sum = 0.0f;
+#ifdef __wasm_simd128__
+    v128_t lanes = wasm_f32x4_splat(0.0f);
+    for (; i + 4 <= n; i += 4) lanes = wasm_f32x4_add(lanes, wasm_v128_load(input + i));
+    // Explicit left-to-right lane combination, followed by the scalar tail.
+    sum = wasm_f32x4_extract_lane(lanes, 0) + wasm_f32x4_extract_lane(lanes, 1);
+    sum += wasm_f32x4_extract_lane(lanes, 2);
+    sum += wasm_f32x4_extract_lane(lanes, 3);
+#endif
+    for (; i < n; ++i) sum += input[i];
+    out[batch] = sum;
+  }
+}
+
 extern "C" void affine(const float* x, const float* y, float* out,
                        std::uint32_t n, std::uint32_t k) {
   std::uint32_t i = 0;

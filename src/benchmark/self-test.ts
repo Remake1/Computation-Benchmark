@@ -1,12 +1,14 @@
-import type { AnyInputs, AnyParameters, Backend, Inputs, MatrixParameters, Parameters, WorkloadId } from './types.ts';
+import type { AnyInputs, AnyParameters, Backend, Inputs, MatrixParameters, Parameters, ReductionParameters, WorkloadId } from './types.ts';
 import { affine, K_VALUES } from '../workloads/affine.ts';
 import { matmul, reference } from '../workloads/matmul.ts';
 import { nextTask } from './runner.ts';
+import { reduction, reference as reductionReference } from '../workloads/reduction.ts';
 
 export interface SelfTestResult { backend: string; status: 'passed' | 'failed' | 'unsupported' | 'cancelled'; cases: number; reason: string | null }
 export async function selfTest(backends: Backend<AnyParameters, AnyInputs>[], signal: AbortSignal, progress: (message: string) => void,
   workload: WorkloadId = 'W1'): Promise<SelfTestResult[]> {
   if (workload === 'W2') return matrixSelfTest(backends, signal, progress);
+  if (workload === 'W3') return reductionSelfTest(backends, signal, progress);
   const results: SelfTestResult[] = [];
   for (const backend of backends) {
     let cases = 0;
@@ -33,6 +35,50 @@ export async function selfTest(backends: Backend<AnyParameters, AnyInputs>[], si
           await nextTask();
         }
         if (signal.aborted) break;
+      }
+      results.push({ backend: backend.id, status: signal.aborted ? 'cancelled' : 'passed', cases, reason: null });
+    } catch (error) { results.push({ backend: backend.id, status: initialized ? 'failed' : 'unsupported', cases, reason: String(error) }); }
+    finally { backend.dispose(); }
+  }
+  return results;
+}
+
+async function reductionSelfTest(backends: Backend<AnyParameters, AnyInputs>[], signal: AbortSignal,
+  progress: (message: string) => void): Promise<SelfTestResult[]> {
+  const results: SelfTestResult[] = [];
+  const configurations: ReductionParameters[] = [
+    ...[1, 3, 4, 5, 63, 64, 65, 4096, 4097, 65537].map(n => ({ n, b: 16, r: 10 })),
+    { n: 3, b: 256, r: 100 },
+    { n: 2 ** 20, b: 1, r: 1 },
+    { n: 2 ** 24, b: 1, r: 1 },
+  ];
+  for (const backend of backends) {
+    let cases = 0, initialized = false;
+    try {
+      await backend.initialize(); initialized = true;
+      for (const p of configurations) {
+        if (signal.aborted) break;
+        progress(`W3 self-test ${backend.id}: N=${p.n}, B=${p.b}, R=${p.r}`);
+        const inputs = reduction.generate(p, 12345);
+        if (p.n === 1) { for (let batch = 0; batch < p.b; batch++) inputs.x[batch] = batch; }
+        if (p.n === 3) { for (let batch = 0; batch < p.b; batch++) inputs.x.set([batch, 1, 2], batch * p.n); }
+        if (p.n === 4) inputs.x.fill(0);
+        inputs.reference = reductionReference(inputs.x, p);
+        const output = new Float32Array(p.b);
+        try {
+          await backend.prepare(p); await backend.stage(inputs);
+          for (let repeat = 0; repeat < 2; repeat++) {
+            output.fill(NaN);
+            await backend.warm(inputs, output);
+            if (!reduction.validate(inputs, output, p).validation_passed) throw new Error('Warm reduction correctness failed.');
+            if (p.n === 3 && !output.every((value, batch) => value === batch + 3)) throw new Error('Hand-checkable reduction failed.');
+            cases++;
+          }
+          await backend.resident(p.r); await backend.readOutput(output);
+          if (!reduction.validate(inputs, output, p).validation_passed) throw new Error('Resident reduction correctness failed.');
+          cases++;
+        } finally { backend.dispose(); }
+        await nextTask();
       }
       results.push({ backend: backend.id, status: signal.aborted ? 'cancelled' : 'passed', cases, reason: null });
     } catch (error) { results.push({ backend: backend.id, status: initialized ? 'failed' : 'unsupported', cases, reason: String(error) }); }

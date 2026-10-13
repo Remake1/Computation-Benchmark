@@ -15,13 +15,15 @@ import type {
   AnyInputs,
   AnyParameters,
   MatrixParameters,
+  ReductionParameters,
   Preset,
   Scenario,
   Workload,
   WorkloadId,
 } from '../benchmark/types.ts';
+import { B_VALUES, reduction, configurations as reductionConfigurations, GENERATOR_VERSION as REDUCTION_GENERATOR_VERSION } from '../workloads/reduction.ts';
 
-export type ParameterName = keyof MatrixParameters;
+export type ParameterName = keyof MatrixParameters | keyof ReductionParameters;
 
 interface NumberField {
   name: Exclude<ParameterName, 'r'>;
@@ -51,7 +53,7 @@ export interface WorkloadDefinition {
   scenarios: readonly { value: Scenario; label: string }[];
   scenarioDescription: string;
   resultsDescription: string;
-  throughput: { label: string; metric: 'bandwidthGBs' | 'gflops' };
+  throughput: { label: string; metric: 'bandwidthGBs' | 'gflops' | 'elementsPerSecond' };
   schemaVersion: number;
   generatorVersion: string;
   residentSetupDefinition: string;
@@ -62,7 +64,7 @@ const warmScenario = { value: 'warm', label: 'Warm end-to-end (JS-visible output
 
 export const WORKLOADS: Record<WorkloadId, WorkloadDefinition> = {
   W1: {
-    workload: affine,
+    workload: affine as Workload<AnyParameters, AnyInputs>,
     title: 'W1: vector affine transform',
     algorithmHtml: '<code>t = 0.5*x + y</code>; for K steps, <code>t = 0.99609375*t + 0.001953125</code>.',
     fields: [
@@ -111,6 +113,33 @@ export const WORKLOADS: Record<WorkloadId, WorkloadDefinition> = {
     configurations(preset, parameters) {
       if (!('m' in parameters)) throw new Error('Matrix dimensions require W2.');
       return matrixConfigurations(preset, parameters);
+    },
+  },
+  W3: {
+    workload: reduction,
+    title: 'W3: array reduction',
+    algorithmHtml: '<code>out[batch] = sum(x[batch, 0..N-1])</code>; B independent vectors of nonnegative float32 inputs. CPU baselines accumulate sequentially; Wasm SIMD combines four lane sums; WebGPU uses successive 64-element chunk trees.',
+    fields: [
+      { name: 'n', label: 'N (elements per vector)', type: 'number', value: 65536, min: 1, max: MAX_N },
+      { name: 'b', label: 'B (independent vectors)', type: 'select', values: B_VALUES },
+    ],
+    presets: [
+      { value: 'quick', label: 'Quick check', description: 'Quick: N=256,4096,65536,1048576; B=1; R=10. N/B/R controls apply to other presets.' },
+      { value: 'size', label: 'Size sweep', description: 'Size sweep: 2^8 through 2^24 plus three tail cases; B=1; uses selected R.' },
+      { value: 'batch', label: 'Batch sweep', description: 'Batch sweep: B=1,16,256 × N=256,4096,65536; uses selected R.' },
+      { value: 'custom', label: 'Custom case', description: 'Custom: one case with the selected N, B, and R.' },
+    ],
+    repetitionLabel: 'R (resident repetitions)',
+    scenarios: [warmScenario, { value: 'resident', label: 'Resident batch (output stays in backend)' }],
+    scenarioDescription: 'Each repetition reduces all B original vectors and overwrites B sums. Final readback and validation are outside resident timing; GPU partials stay resident.',
+    resultsDescription: 'One operation reduces all B vectors. Elements/s = N*B*repetitions / time. GPU stages are per reduction, independent of B and R; summation orders differ and are validated with tolerance.',
+    throughput: { label: 'Elements/s', metric: 'elementsPerSecond' },
+    schemaVersion: 3,
+    generatorVersion: REDUCTION_GENERATOR_VERSION,
+    residentSetupDefinition: 'One input staging per backend/configuration, shared by warmups and samples; not additive per record.',
+    configurations(preset, parameters) {
+      if (!('b' in parameters)) throw new Error('Reduction batches require W3.');
+      return reductionConfigurations(preset, parameters);
     },
   },
 };

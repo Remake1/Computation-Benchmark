@@ -4,21 +4,24 @@ export interface Implementation {
   tier: ImplementationTier;
   tuning: Record<string, unknown>;
 }
-export type WorkloadId = 'W1' | 'W2';
+export type WorkloadId = 'W1' | 'W2' | 'W3';
 export type Scenario = 'warm' | 'resident' | 'reuse';
-export type Preset = 'quick' | 'size' | 'intensity' | 'shape' | 'custom';
-export interface Parameters { n: number; k: number; r: number }
+export type Preset = 'quick' | 'size' | 'intensity' | 'shape' | 'batch' | 'custom';
+export interface CommonParameters { n: number; r: number }
+export interface Parameters extends CommonParameters { k: number }
 export interface Inputs { x: Float32Array; y: Float32Array }
 export interface MatrixParameters extends Parameters { m: number }
 export interface MatrixInputs { a: Float32Array[]; b: Float32Array; reference: Float64Array }
-export type AnyParameters = Parameters | MatrixParameters;
-export type AnyInputs = Inputs | MatrixInputs;
+export interface ReductionParameters extends CommonParameters { b: number }
+export interface ReductionInputs { x: Float32Array; reference: Float64Array }
+export type AnyParameters = Parameters | MatrixParameters | ReductionParameters;
+export type AnyInputs = Inputs | MatrixInputs | ReductionInputs;
 export interface Accuracy {
   validation_passed: boolean;
   max_abs_error: number | null;
   relative_l2_error: number | null;
 }
-export interface Backend<P extends Parameters = Parameters, I = Inputs> {
+export interface Backend<P extends CommonParameters = Parameters, I = Inputs> {
   readonly id: BackendId;
   readonly metadata: Record<string, unknown>;
   readonly implementations?: Partial<Record<WorkloadId, Implementation>>;
@@ -31,7 +34,7 @@ export interface Backend<P extends Parameters = Parameters, I = Inputs> {
   readOutput(output: Float32Array): void | Promise<void>;
   dispose(): void;
 }
-export interface Workload<P extends Parameters = Parameters, I = Inputs> {
+export interface Workload<P extends CommonParameters = Parameters, I = Inputs> {
   id: WorkloadId;
   generate(parameters: P, seed: number): I;
   validateParameters(parameters: P, seed: number): void;
@@ -39,7 +42,7 @@ export interface Workload<P extends Parameters = Parameters, I = Inputs> {
   validate(inputs: I, output: Float32Array, parameters: P, scenario?: Scenario): Accuracy;
   logicalBytes(parameters: P): number;
 }
-export interface RunOptions<P extends Parameters = Parameters> {
+export interface RunOptions<P extends CommonParameters = Parameters> {
   experimentId: string;
   sessionId: string;
   seed: number;

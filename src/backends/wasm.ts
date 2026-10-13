@@ -15,6 +15,7 @@ interface WasmModule {
   _free(ptr: number): void;
   _affine(x: number, y: number, out: number, n: number, k: number): void;
   _matmul(a: number, b: number, out: number, m: number, n: number, k: number): void;
+  _reduce_sum(x: number, out: number, n: number, b: number): void;
 }
 export class WasmBackend implements Backend<AnyParameters, AnyInputs> {
   readonly id: 'wasm-scalar' | 'wasm-simd';
@@ -35,7 +36,9 @@ export class WasmBackend implements Backend<AnyParameters, AnyInputs> {
       W2: { tier: 'optimized', tuning: { simd_lanes: 4, block_size: 32, scalar_tail: true,
         loop_order: 'row-block/column-block/K-block/row/K/column',
         summation_order: 'ascending K per output, unchanged from scalar', arithmetic: 'f32 multiply then add; no fusion' } },
-    } : {};
+      W3: { tier: 'optimized', tuning: { simd_lanes: 4, scalar_tail: true,
+        summation_order: 'four strided f32 lane accumulators; combine lanes left-to-right, then scalar tail' } },
+    } : { W3: { tier: 'baseline', tuning: { summation_order: 'sequential ascending index per vector' } } };
   }
   initialize(): Promise<void> {
     return this.initialization ??= this.load();
@@ -58,7 +61,7 @@ export class WasmBackend implements Backend<AnyParameters, AnyInputs> {
     this.dispose();
     this.p = p;
     try {
-      const lengths = 'm' in p ? [p.m * p.k, p.k * p.n, p.m * p.n] : [p.n, p.n, p.n];
+      const lengths = 'm' in p ? [p.m * p.k, p.k * p.n, p.m * p.n] : 'b' in p ? [p.n * p.b, p.b] : [p.n, p.n, p.n];
       for (const length of lengths) {
         const ptr = this.module._malloc(length * 4);
         if (!ptr) throw new Error('Wasm allocation failed.');
@@ -66,15 +69,19 @@ export class WasmBackend implements Backend<AnyParameters, AnyInputs> {
       }
       // All allocations may grow memory. Acquire views only afterward.
       const heap = this.module.HEAPF32;
-      [this.x, this.y, this.output] = this.pointers.map((ptr, i) => new Float32Array(heap.buffer, ptr, lengths[i]));
+      const views = this.pointers.map((ptr, i) => new Float32Array(heap.buffer, ptr, lengths[i]));
+      this.x = views[0];
+      this.y = 'b' in p ? new Float32Array(0) : views[1];
+      this.output = views.at(-1)!;
     } catch (error) { this.dispose(); throw error; }
   }
   stage(inputs: AnyInputs): void {
     if ('a' in inputs) this.y.set(inputs.b);
-    else { this.x.set(inputs.x); this.y.set(inputs.y); }
+    else { this.x.set(inputs.x); if ('y' in inputs) this.y.set(inputs.y); }
   }
   private execute(): void {
     if ('m' in this.p) this.module._matmul(this.pointers[0], this.pointers[1], this.pointers[2], this.p.m, this.p.n, this.p.k);
+    else if ('b' in this.p) this.module._reduce_sum(this.pointers[0], this.pointers[1], this.p.n, this.p.b);
     else this.module._affine(this.pointers[0], this.pointers[1], this.pointers[2], this.p.n, this.p.k);
   }
   warm(inputs: AnyInputs, output: Float32Array): number {

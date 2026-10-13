@@ -40,12 +40,11 @@ export function readExperiment(
     if (!scenario) throw new Error('Unknown timing scenario for this workload.');
     return scenario.value;
   });
-  const parameters = {
-    n: numberField(data, 'n'),
-    k: numberField(data, 'k'),
-    r: numberField(data, 'r'),
-    ...(definition.fields.some(field => field.name === 'm') ? { m: numberField(data, 'm') } : {}),
-  };
+  const common = { n: numberField(data, 'n'), r: numberField(data, 'r') };
+  const parameters: AnyParameters = definition.workload.id === 'W3'
+    ? { ...common, b: numberField(data, 'b') }
+    : { ...common, k: numberField(data, 'k'),
+      ...(definition.fields.some(field => field.name === 'm') ? { m: numberField(data, 'm') } : {}) };
   const seed = numberField(data, 'seed');
   const configurations = definition.configurations(preset.value, parameters);
   for (const configuration of configurations) {

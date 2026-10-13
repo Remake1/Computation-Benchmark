@@ -19,16 +19,17 @@ for (const simd of [false, true]) {
     throw new Error('Scalar build contains SIMD instructions.');
   }
   if (/relaxed/.test(wat)) throw new Error('Relaxed SIMD is forbidden in the primary build.');
-  for (const kernel of ['affine', 'matmul']) {
+  for (const kernel of ['affine', 'matmul', 'reduce_sum']) {
     const start = wat.indexOf(` (func $${kernel} (`);
     if (start === -1) throw new Error(`Missing named ${kernel} kernel; build with --profiling-funcs.`);
     const end = wat.indexOf('\n (func ', start + 1);
     const body = wat.slice(start, end === -1 ? undefined : end);
     if (simd) {
-      for (const instruction of ['v128.load', 'v128.store', 'f32x4.mul', 'f32x4.add']) {
+      const instructions = kernel === 'reduce_sum' ? ['v128.load', 'f32x4.add'] : ['v128.load', 'v128.store', 'f32x4.mul', 'f32x4.add'];
+      for (const instruction of instructions) {
         if (!body.includes(`(${instruction}`)) throw new Error(`${kernel} is missing ${instruction}.`);
       }
     }
-    console.log(`${stem}: ${kernel} confirmed ${simd ? 'SIMD loads/stores and f32x4 multiply/add' : 'scalar'}`);
+    console.log(`${stem}: ${kernel} confirmed ${simd ? 'SIMD instructions' : 'scalar'}`);
   }
 }

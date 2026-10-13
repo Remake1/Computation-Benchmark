@@ -15,6 +15,8 @@ export interface Summary {
   scalarSpeedup: number | null;
   bandwidthGBs: number | null;
   gflops: number | null;
+  elementsPerSecond: number | null;
+  reductionStages: number | null;
   statuses: Status[];
   reasons: string[];
   nearTimer: boolean;
@@ -24,11 +26,13 @@ export function quantile(sorted: number[], q: number): number {
   const lower = Math.floor(position);
   return sorted[lower] + (sorted[Math.ceil(position)] - sorted[lower]) * (position - lower);
 }
+function parameterKey(p: AnyParameters): string {
+  return 'b' in p ? `${p.n}/${p.b}/${p.r}` : `${'m' in p ? p.m : ''}/${p.n}/${p.k}/${p.r}`;
+}
 export function summarize(records: SampleRecord[]): Summary[] {
   const groups = new Map<string, SampleRecord[]>();
   for (const record of records) {
-    const { n, k, r } = record.parameters;
-    const key = `${record.workload}/${record.implementation_tier}/${record.backend}/${'m' in record.parameters ? record.parameters.m : ''}/${n}/${k}/${r}/${record.timing_scenario}`;
+    const key = `${record.workload}/${record.implementation_tier}/${record.backend}/${parameterKey(record.parameters)}/${record.timing_scenario}`;
     const group = groups.get(key) ?? [];
     group.push(record); groups.set(key, group);
   }
@@ -42,9 +46,12 @@ export function summarize(records: SampleRecord[]): Summary[] {
       median, iqr: times.length ? quantile(times, 0.75) - quantile(times, 0.25) : null,
       perOperation: median === null ? null : median / repetitions,
       numberSpeedup: null, f32Speedup: null, scalarSpeedup: null,
-      bandwidthGBs: first.workload === 'W1' && first.parameters.k === 0 && median !== null && median > 0 ? 12 * first.parameters.n * repetitions / (median * 1e6) : null,
+      bandwidthGBs: first.workload === 'W1' && 'k' in first.parameters && first.parameters.k === 0 && median !== null && median > 0 ? 12 * first.parameters.n * repetitions / (median * 1e6) : null,
       gflops: first.workload === 'W2' && 'm' in first.parameters && median !== null && median > 0
         ? 2 * first.parameters.m * first.parameters.n * first.parameters.k * repetitions / (median * 1e6) : null,
+      elementsPerSecond: first.workload === 'W3' && 'b' in first.parameters && median !== null && median > 0
+        ? first.parameters.n * first.parameters.b * repetitions * 1000 / median : null,
+      reductionStages: first.workload === 'W3' && typeof first.tuning.reduction_stages === 'number' ? first.tuning.reduction_stages : null,
       statuses: [...new Set(group.map(r => r.status))],
       reasons: [...new Set(group.flatMap(r => r.skip_reason ? [r.skip_reason] : []))],
       nearTimer: group.some(r => r.near_timer_granularity),
@@ -52,8 +59,7 @@ export function summarize(records: SampleRecord[]): Summary[] {
   });
   for (const row of summaries) {
     const matching = (backend: BackendId, tier = row.tier) => summaries.find(other => other.workload === row.workload && other.tier === tier && other.backend === backend && other.scenario === row.scenario &&
-      ('m' in other.parameters ? other.parameters.m : null) === ('m' in row.parameters ? row.parameters.m : null) &&
-      other.parameters.n === row.parameters.n && other.parameters.k === row.parameters.k && other.parameters.r === row.parameters.r);
+      parameterKey(other.parameters) === parameterKey(row.parameters));
     if (row.median !== null && row.median > 0 && !row.statuses.includes('validation-failed')) {
       const number = matching('js-number');
       const f32 = matching('js-f32');

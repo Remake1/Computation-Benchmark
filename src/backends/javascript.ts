@@ -1,4 +1,19 @@
-import type { AnyInputs, AnyParameters, Backend, BackendId, MatrixParameters } from '../benchmark/types.ts';
+import type { AnyInputs, AnyParameters, Backend, BackendId, MatrixParameters, ReductionParameters } from '../benchmark/types.ts';
+
+export function reductionNumber(x: Float32Array, out: Float32Array, p: ReductionParameters): void {
+  for (let batch = 0; batch < p.b; batch++) {
+    let sum = 0;
+    for (let i = 0; i < p.n; i++) sum += x[batch * p.n + i];
+    out[batch] = sum;
+  }
+}
+export function reductionF32(x: Float32Array, out: Float32Array, p: ReductionParameters): void {
+  for (let batch = 0; batch < p.b; batch++) {
+    let sum = 0;
+    for (let i = 0; i < p.n; i++) sum = Math.fround(sum + x[batch * p.n + i]);
+    out[batch] = sum;
+  }
+}
 
 export function affineNumber(x: Float32Array, y: Float32Array, out: Float32Array, k: number): void {
   for (let i = 0; i < out.length; i++) {
@@ -39,26 +54,32 @@ export class JavaScriptBackend implements Backend<AnyParameters, AnyInputs> {
   readonly metadata = { arithmetic: '', workgroup_size: null };
   private kernel: typeof affineNumber;
   private matrixKernel: typeof matmulNumber;
+  private reductionKernel: typeof reductionNumber;
+  readonly implementations = { W3: { tier: 'baseline' as const, tuning: { summation_order: 'sequential ascending index per vector' } } };
   private inputs!: AnyInputs;
   private output = new Float32Array(0);
   private k = 0;
   private matrix?: MatrixParameters;
+  private reduction?: ReductionParameters;
   constructor(f32 = false) {
     this.id = f32 ? 'js-f32' : 'js-number';
     this.kernel = f32 ? affineF32 : affineNumber;
     this.matrixKernel = f32 ? matmulF32 : matmulNumber;
+    this.reductionKernel = f32 ? reductionF32 : reductionNumber;
     this.metadata.arithmetic = f32 ? 'fround after each multiply/add' : 'Number intermediates, f32 store';
   }
   async initialize(): Promise<void> {}
   prepare(p: AnyParameters): void {
-    this.k = p.k; this.matrix = 'm' in p ? p : undefined;
-    this.output = new Float32Array(this.matrix ? 0 : p.n);
+    this.k = 'k' in p ? p.k : 0; this.matrix = 'm' in p ? p : undefined;
+    this.reduction = 'b' in p ? p : undefined;
+    this.output = new Float32Array(this.matrix ? 0 : this.reduction ? this.reduction.b : p.n);
   }
   stage(inputs: AnyInputs): void { this.inputs = inputs; }
   warm(inputs: AnyInputs, output: Float32Array): number {
     const start = performance.now();
     if ('a' in inputs) this.matrixKernel(inputs.a[0], inputs.b, output, this.matrix!);
-    else this.kernel(inputs.x, inputs.y, output, this.k);
+    else if ('y' in inputs) this.kernel(inputs.x, inputs.y, output, this.k);
+    else this.reductionKernel(inputs.x, output, this.reduction!);
     return performance.now() - start;
   }
   reuse(inputs: AnyInputs, output: Float32Array): number {
@@ -70,9 +91,12 @@ export class JavaScriptBackend implements Backend<AnyParameters, AnyInputs> {
     return performance.now() - start;
   }
   resident(r: number): number {
-    if (!('x' in this.inputs)) throw new Error('Resident mode requires W1.');
+    if (!('x' in this.inputs)) throw new Error('Resident mode requires W1 or W3.');
     const start = performance.now();
-    for (let i = 0; i < r; i++) this.kernel(this.inputs.x, this.inputs.y, this.output, this.k);
+    for (let i = 0; i < r; i++) {
+      if ('y' in this.inputs) this.kernel(this.inputs.x, this.inputs.y, this.output, this.k);
+      else this.reductionKernel(this.inputs.x, this.output, this.reduction!);
+    }
     return performance.now() - start;
   }
   readOutput(output: Float32Array): void { output.set(this.output); }

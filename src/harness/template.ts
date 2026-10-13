@@ -4,7 +4,7 @@ import { WORKLOADS } from './workloads.ts';
 export function harnessTemplate(backendIds: readonly BackendId[]): string {
   return `
   <h1 id="workload-title"></h1>
-  <p>Baseline implementations: ordinary JS, float32-control JS, scalar C++/Wasm, and WebGPU. Optimized Wasm SIMD processes four elements or matrix columns per vector.</p>
+  <p>Baseline implementations: ordinary JS, float32-control JS, scalar C++/Wasm, and WebGPU. Optimized Wasm SIMD uses four lanes; its summation order depends on the workload.</p>
   <p id="algorithm"></p>
   <details open><summary>Backend capabilities</summary><pre id="capabilities">Checking…</pre></details>
   <form id="controls">

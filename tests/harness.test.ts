@@ -83,6 +83,31 @@ test('harness rejects mismatched workload choices and invalid custom parameters'
   assert.throws(() => readExperiment(missing, WORKLOADS.W1, [], context), /Missing form field: seed/);
 });
 
+test('W3 harness parses B without K, offers batch presets, and exports schema 3', async () => {
+  const definition = WORKLOADS.W3, backend = new JavaScriptBackend(true);
+  const data = formData({ n: '65', b: '16' });
+  data.delete('k'); data.delete('backend'); data.append('backend', 'js-f32');
+  const experiment = readExperiment(data, definition, [backend], context);
+  assert.deepEqual(experiment.options.configurations, [{ n: 65, b: 16, r: 10 }]);
+  assert.equal(definition.throughput.metric, 'elementsPerSecond');
+  assert.deepEqual(definition.fields.map(field => field.name), ['n', 'b']);
+  const batch = readExperiment(formData({ preset: 'batch', b: '256' }), definition, [], context);
+  assert.equal(batch.options.configurations.length, 9);
+  assert.throws(() => readExperiment(formData({ b: '2' }), definition, [], context), /B must be/);
+  assert.throws(() => readExperiment(formData({ b: '16' }, ['reuse']), definition, [], context), /Unknown timing scenario/);
+  const records: SampleRecord[] = [];
+  await runBenchmark(definition.workload, experiment.backends, experiment.options, new AbortController().signal,
+    { record: record => records.push(record), progress: () => {}, yield: async () => {} });
+  assert.equal(records.length, 6);
+  assert.ok(records.every(record => record.workload === 'W3' && record.status === 'ok'));
+  const environment = createEnvironment(definition, experiment, [backend], browser);
+  const exported = jsonLines(environment, records).trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(exported[0].schema_version, 3);
+  assert.equal(exported[0].generator_version, 'xorshift32-v1-reduction-batch-major-f32');
+  assert.deepEqual(exported[0].accuracy_contract, { atol: 1e-5, rtol: 1e-4 });
+  assert.deepEqual(exported.slice(1), records);
+});
+
 test('backend selection retains registered order and does not duplicate selected backends', () => {
   const backends = [new JavaScriptBackend(), new JavaScriptBackend(true)];
   const data = formData();

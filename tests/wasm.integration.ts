@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { WasmBackend } from '../src/backends/wasm.ts';
 import { affine, K_VALUES } from '../src/workloads/affine.ts';
 import { matmul, reference } from '../src/workloads/matmul.ts';
+import { reduction, reference as reductionReference } from '../src/workloads/reduction.ts';
 import { affineF32, matmulF32 } from '../src/backends/javascript.ts';
 import { selfTest } from '../src/benchmark/self-test.ts';
 import { runBenchmark } from '../src/benchmark/runner.ts';
@@ -31,12 +32,48 @@ class LocalWasmBackend extends WasmBackend {
 
 for (const simd of [false, true]) {
   const name = simd ? 'SIMD' : 'scalar';
-  test(`compiled ${name} passes both complete browser correctness suites`, async () => {
+  test(`compiled ${name} passes all complete browser correctness suites`, async () => {
     const backend = new LocalWasmBackend(simd);
-    for (const workload of ['W1', 'W2'] as const) {
+    for (const workload of ['W1', 'W2', 'W3'] as const) {
       const results = await selfTest([backend], new AbortController().signal, () => {}, workload);
       assert.equal(results[0].status, 'passed', results[0].reason ?? '');
       assert.ok(results[0].cases > 20);
+    }
+  });
+
+  test(`compiled ${name} W3 handles lanes/batches, overwrites output, and preserves resident input`, async () => {
+    const backend = new LocalWasmBackend(simd);
+    await backend.initialize();
+    for (const n of [1, 3, 4, 5, 63, 64, 65, 4096, 4097, 65537]) {
+      const p = { n, b: 16, r: 10 }, inputs = reduction.generate(p, 42), output = new Float32Array(p.b);
+      // Independently model the documented f32 order, including horizontal sum and tail.
+      const expected = new Float32Array(p.b);
+      for (let batch = 0; batch < p.b; batch++) {
+        const lanes = [0, 0, 0, 0]; let i = 0, sum = 0;
+        if (simd) {
+          for (; i + 4 <= n; i += 4) for (let lane = 0; lane < 4; lane++) {
+            lanes[lane] = Math.fround(lanes[lane] + inputs.x[batch * n + i + lane]);
+          }
+          sum = Math.fround(Math.fround(Math.fround(lanes[0] + lanes[1]) + lanes[2]) + lanes[3]);
+        }
+        for (; i < n; i++) sum = Math.fround(sum + inputs.x[batch * n + i]);
+        expected[batch] = sum;
+      }
+      backend.prepare(p); backend.stage(inputs); backend.warm(inputs, output);
+      assert.deepEqual(output, expected, `N=${n}`);
+      for (const r of [1, 10, 100]) {
+        backend.resident(r); backend.readOutput(output);
+        assert.deepEqual(output, expected);
+      }
+      inputs.x.fill(0);
+      backend.resident(10); backend.readOutput(output);
+      assert.deepEqual(output, expected, 'canonical changes must not affect already staged Wasm input');
+      inputs.reference = reductionReference(inputs.x, p);
+      backend.warm(inputs, output);
+      assert.ok(output.every(value => value === 0));
+      backend.resident(10); backend.readOutput(output);
+      assert.ok(output.every(value => value === 0));
+      backend.dispose(); backend.dispose();
     }
   });
 
@@ -116,6 +153,15 @@ for (const simd of [false, true]) {
     const batch = new Float32Array(matrix.r * matrix.m * matrix.n);
     backend.reuse(matrixInputs, batch);
     assert.equal(matmul.validate(matrixInputs, batch, matrix, 'reuse').validation_passed, true);
+    const reductionParameters = { n: 2 ** 20 + 1, b: 16, r: 1 };
+    const reductionInputs = reduction.generate(reductionParameters, 42), sums = new Float32Array(16);
+    const beforeReduction = backend.heap();
+    backend.prepare(reductionParameters);
+    assert.notEqual(backend.heap(), beforeReduction);
+    backend.stage(reductionInputs); backend.resident(1); backend.readOutput(sums);
+    assert.equal(reduction.validate(reductionInputs, sums, reductionParameters).validation_passed, true);
+    backend.prepare(p); backend.warm(inputs, output);
+    assert.equal(affine.validate(inputs, output, p).validation_passed, true);
     backend.dispose(); backend.dispose();
     assert.equal(backend.metadata.heap_bytes, backend.heap().byteLength);
   });
@@ -149,5 +195,25 @@ test('real SIMD runs export optimized tier, tuning, compiler flags, and all time
       assert.equal(resident.staged_bytes, 0);
       assert.equal(resident.validation_readback_bytes, 4 * p.n);
     }
+  }
+});
+
+test('real W3 Wasm exports tier, reduction order, and final-only transfers', async () => {
+  for (const simd of [false, true]) {
+    const backend = new LocalWasmBackend(simd), p = { n: 65, b: 16, r: 10 }, records: SampleRecord[] = [];
+    await runBenchmark(reduction, [backend], {
+      experimentId: 'w3-wasm', sessionId: 'session', seed: 42, schedulingSeed: 1,
+      samples: 2, warmups: 2, budgetMs: 30000, memoryBudgetBytes: 2 ** 30, timerResolutionMs: 0.1,
+      scenarios: ['warm', 'resident'], configurations: [p],
+    }, new AbortController().signal, { record: record => records.push(record), progress: () => {}, yield: async () => {} });
+    assert.equal(records.length, 4);
+    assert.ok(records.every(record => record.status === 'ok' && record.validation_passed));
+    assert.ok(records.every(record => record.implementation_tier === (simd ? 'optimized' : 'baseline')));
+    assert.ok(records.every(record => typeof record.tuning.summation_order === 'string'));
+    const warm = records[0], resident = records[1];
+    assert.equal(warm.upload_bytes, 4 * p.n * p.b); assert.equal(warm.download_bytes, 4 * p.b);
+    assert.equal(resident.staged_bytes, 0); assert.equal(resident.validation_readback_bytes, 4 * p.b);
+    assert.equal(resident.resident_setup_upload_bytes, 4 * p.n * p.b);
+    assert.equal(resident.tuning.reduction_stages, null);
   }
 });

@@ -1,4 +1,5 @@
 import { random32, validateParameters } from '../workloads/affine.ts';
+import { reductionStages } from '../workloads/reduction.ts';
 import { ConfigurationSkip } from './types.ts';
 import type { Accuracy, AnyParameters, Backend, BackendId, Parameters, RunOptions, SampleRecord, Scenario, Status, Workload } from './types.ts';
 
@@ -15,6 +16,18 @@ const unavailableAccuracy = { validation_passed: null, max_abs_error: null, rela
 export const nextTask = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
 
 export function estimateMemory(parameters: number | AnyParameters, backends: BackendInfo[]): number {
+  if (typeof parameters !== 'number' && 'b' in parameters) {
+    const p = parameters, input = 4 * p.n * p.b, output = 4 * p.b;
+    const stages = reductionStages(p.n);
+    const partials = stages.reduce((bytes, n) => bytes + 4 * p.b * n, 0);
+    // Canonical input, float64 references, returned sums, retained heaps,
+    // per-stage GPU storage/uniforms, readback, and upload staging.
+    return 16 * 2 ** 20 + input + 3 * output + backends.reduce((bytes, backend) => {
+      if (backend.id.startsWith('wasm-')) return bytes + Math.max(2 * (input + output), Number(backend.metadata.heap_bytes) || 0);
+      if (backend.id === 'webgpu-baseline') return bytes + 2 * input + partials + output + 16 * stages.length;
+      return bytes + output;
+    }, 0);
+  }
   if (typeof parameters !== 'number' && 'm' in parameters) {
     const p = parameters;
     const a = 4 * p.m * p.k, b = 4 * p.k * p.n, c = 4 * p.m * p.n;
@@ -56,7 +69,7 @@ export function timerResolution(): number {
   return Number.isFinite(smallest) ? smallest : 1;
 }
 
-export function validateRun<P extends Parameters, I>(options: RunOptions<P>, backends: Backend<P, I>[], workload?: Workload<P, I>): void {
+export function validateRun<P extends AnyParameters, I>(options: RunOptions<P>, backends: Backend<P, I>[], workload?: Workload<P, I>): void {
   if (!backends.length || !options.scenarios.length || !options.configurations.length) throw new Error('Select at least one backend, scenario, and configuration.');
   if (new Set(backends.map(b => b.id)).size !== backends.length || new Set(options.scenarios).size !== options.scenarios.length) throw new Error('Duplicate backend or scenario.');
   const batchScenario = workload?.id === 'W2' ? 'reuse' : 'resident';
@@ -69,12 +82,13 @@ export function validateRun<P extends Parameters, I>(options: RunOptions<P>, bac
   random32(options.schedulingSeed);
   for (const p of options.configurations) {
     if (workload?.id !== 'W2' && 'm' in p) throw new Error('Matrix dimensions require W2.');
+    if (workload?.id !== 'W3' && 'b' in p) throw new Error('Reduction batches require W3.');
     if (workload) workload.validateParameters(p, options.seed);
-    else validateParameters(p, options.seed);
+    else validateParameters(p as Parameters, options.seed);
   }
 }
 
-export async function runBenchmark<P extends Parameters, I>(workload: Workload<P, I>, backends: Backend<P, I>[], options: RunOptions<P>,
+export async function runBenchmark<P extends AnyParameters, I>(workload: Workload<P, I>, backends: Backend<P, I>[], options: RunOptions<P>,
   signal: AbortSignal, hooks: RunnerHooks): Promise<void> {
   validateRun(options, backends, workload);
   const now = hooks.now ?? (() => performance.now());
@@ -87,12 +101,13 @@ export async function runBenchmark<P extends Parameters, I>(workload: Workload<P
     reason: string | null = null, elapsed: number | null = null, accuracy: Accuracy | null = null, index: number | null = null): void => {
     const remote = backend.id.startsWith('wasm-') || backend.id === 'webgpu-baseline';
     const implementation = backend.implementations?.[workload.id];
-    const matrix = workload.id === 'W2' && 'm' in p ? p as P & { m: number } : null;
+    const matrix = workload.id === 'W2' && 'm' in p ? p as P & { m: number; k: number } : null;
+    const reduction = workload.id === 'W3' && 'b' in p ? p as P & { b: number } : null;
     const repetitions = scenario === 'warm' ? 1 : p.r;
-    const inputBytes = matrix ? 4 * (matrix.m * p.k * repetitions + p.k * p.n) : p.n * 8;
-    const outputBytes = matrix ? 4 * matrix.m * p.n * repetitions : p.n * 4;
-    const setupBytes = matrix ? 4 * p.k * p.n : p.n * 8;
-    const upload = remote ? (scenario === 'warm' ? inputBytes : matrix ? 4 * matrix.m * p.k * p.r : 0) : 0;
+    const inputBytes = matrix ? 4 * (matrix.m * matrix.k * repetitions + matrix.k * p.n) : reduction ? 4 * p.n * reduction.b : p.n * 8;
+    const outputBytes = matrix ? 4 * matrix.m * p.n * repetitions : reduction ? 4 * reduction.b : p.n * 4;
+    const setupBytes = matrix ? 4 * matrix.k * p.n : inputBytes;
+    const upload = remote ? (scenario === 'warm' ? inputBytes : matrix ? 4 * matrix.m * matrix.k * p.r : 0) : 0;
     const download = remote && scenario !== 'resident' ? outputBytes : 0;
     hooks.record({
       record_type: 'sample', experiment_id: options.experimentId, environment_id: options.experimentId,
@@ -103,11 +118,13 @@ export async function runBenchmark<P extends Parameters, I>(workload: Workload<P
       upload_bytes: elapsed === null ? null : upload, download_bytes: elapsed === null ? null : download,
       staged_bytes: elapsed === null ? null : upload + download,
       resident_setup_upload_bytes: remote && staged.has(backend.id) ? setupBytes : 0,
-      validation_readback_bytes: scenario === 'resident' && elapsed !== null ? p.n * 4 : 0,
+      validation_readback_bytes: scenario === 'resident' && elapsed !== null ? outputBytes : 0,
       allocation_policy: 'preallocated per configuration', warmup_policy: { iterations: options.warmups },
       cache_policy: 'warm backend; browser/driver caches uncontrolled', worker_count: 0,
       compiler_flags: backend.metadata.compiler_flags ?? null, source_revision: options.sourceRevision ?? backend.metadata.source_revision ?? null,
-      tuning: implementation?.tuning ?? (backend.id === 'webgpu-baseline' ? { workgroup_size: 64, elements_per_invocation: 1 } : {}),
+      tuning: reduction ? { ...implementation?.tuning,
+        reduction_stages: backend.id === 'webgpu-baseline' ? reductionStages(p.n).length : null,
+      } : implementation?.tuning ?? (backend.id === 'webgpu-baseline' ? { workgroup_size: 64, elements_per_invocation: 1 } : {}),
       timer_resolution_ms: options.timerResolutionMs,
       near_timer_granularity: elapsed !== null && elapsed < 10 * options.timerResolutionMs,
       ...(accuracy ?? unavailableAccuracy), status, skip_reason: reason,
@@ -121,7 +138,7 @@ export async function runBenchmark<P extends Parameters, I>(workload: Workload<P
     hooks.ready?.(backends);
     for (const p of options.configurations) {
       staged.clear();
-      const description = `${'m' in p ? `M=${p.m}, ` : ''}N=${p.n}, K=${p.k}, R=${p.r}`;
+      const description = `${'m' in p ? `M=${p.m}, ` : ''}N=${p.n}, ${'b' in p ? `B=${p.b}` : `K=${p.k}`}, R=${p.r}`;
       hooks.progress(`Preparing ${description}`);
       const active = backends.filter(backend => !unavailable.has(backend.id));
       const stopped = new Set<BackendId>();

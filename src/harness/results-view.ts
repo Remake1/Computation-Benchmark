@@ -28,9 +28,13 @@ function resultColumns(definition: WorkloadDefinition): ResultColumn[] {
   return [
     ...dimensions.map(name => ({
       label: name.toUpperCase(),
-      value: (row: Summary) => name === 'm'
-        ? ('m' in row.parameters ? row.parameters.m : '—')
-        : row.parameters[name],
+      value: (row: Summary) => {
+        const p = row.parameters;
+        if (name === 'm') return 'm' in p ? p.m : '—';
+        if (name === 'b') return 'b' in p ? p.b : '—';
+        if (name === 'k') return 'k' in p ? p.k : '—';
+        return p[name];
+      },
     })),
     { label: 'Backend', value: row => row.backend },
     { label: 'Tier', value: row => row.tier },
@@ -40,6 +44,7 @@ function resultColumns(definition: WorkloadDefinition): ResultColumn[] {
     { label: 'IQR ms', value: row => row.iqr === null ? '—' : iqrFormatter.format(row.iqr) },
     { label: 'ms / operation', value: row => formatNumber(row.perOperation) },
     { label: definition.throughput.label, value: row => formatNumber(row[definition.throughput.metric]) },
+    ...(definition.workload.id === 'W3' ? [{ label: 'GPU stages', value: (row: Summary) => row.reductionStages ?? '—' }] : []),
     { label: 'Validation / status', value: formatStatus },
   ];
 }
